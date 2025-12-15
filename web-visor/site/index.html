@@ -91,60 +91,62 @@
 
   <script>
     // ========= CONFIG =========
-    // Cuando tengas QGIS Server en Railway, reemplaza esto:
-    const QGIS_BASE_URL = "http://TU-QGIS-SERVER"; // Ej: https://qgis-server-production.up.railway.app
+    const QGIS_BASE_URL = "https://susceptibilidadlagoagrio-production.up.railway.app";
+    const MAP_PATH = "/project/Susceptibilidad_a_inundacion.qgz";
 
-    // En Railway (Linux) NO es .exe. Será:
-    // /cgi-bin/qgis_mapserv.fcgi
-    const qgisUrl =
-      QGIS_BASE_URL +
-      "/cgi-bin/qgis_mapserv.fcgi" +
-      "?MAP=/data/Susceptibilidad%20a%20inundacion.qgz";
+    // Endpoint real en Railway (según tu Capabilities)
+    const owsBase = `${QGIS_BASE_URL}/ows/?MAP=${encodeURIComponent(MAP_PATH)}`;
 
-    // Nombres EXACTOS de capas WMS (ajusta si cambia en QGIS)
+    // Nombres EXACTOS de capas WMS (tal cual Capabilities)
     const WMS = {
       muy_alta: "Muy alta",
       alta: "Alta",
       media: "Media",
       baja: "Baja",
-      muy_baja: "Muy Baja"
+      muy_baja: "Muy baja"
     };
 
+    // el estilo real que aparece en tu XML
+    const STYLE_NAME = "predeterminado";
+
+    let homeExtent3857 = null;
+
     // ========= HELPERS =========
-    function makeWmsLayer(layerName) {
+    function makeWmsLayer(layerName, opacityDefault) {
       return new ol.layer.Image({
         source: new ol.source.ImageWMS({
-          url: qgisUrl,
+          url: owsBase,
           params: {
             SERVICE: "WMS",
             VERSION: "1.3.0",
             REQUEST: "GetMap",
             LAYERS: layerName,
-            STYLES: "",
+            STYLES: STYLE_NAME,
             FORMAT: "image/png",
             TRANSPARENT: true
           },
-          ratio: 1
+          ratio: 1,
+          crossOrigin: "anonymous"
         }),
-        opacity: 0.85,
-        visible: false // ✅ NO consume hasta prender
+        opacity: opacityDefault,
+        visible: false // ✅ no consume hasta prender
       });
     }
 
     // ========= CAPAS =========
     const osm = new ol.layer.Tile({ source: new ol.source.OSM(), visible: true });
 
-    const lyrMuyAlta = makeWmsLayer(WMS.muy_alta);
-    const lyrAlta    = makeWmsLayer(WMS.alta);
-    const lyrMedia   = makeWmsLayer(WMS.media);
-    const lyrBaja    = makeWmsLayer(WMS.baja);
-    const lyrMuyBaja = makeWmsLayer(WMS.muy_baja);
+    const lyrMuyAlta = makeWmsLayer(WMS.muy_alta, 0.85);
+    const lyrAlta    = makeWmsLayer(WMS.alta,    0.50);
+    const lyrMedia   = makeWmsLayer(WMS.media,   0.35);
+    const lyrBaja    = makeWmsLayer(WMS.baja,    0.35);
+    const lyrMuyBaja = makeWmsLayer(WMS.muy_baja,0.35);
 
     // ========= MAPA =========
     const view = new ol.View({
       projection: "EPSG:3857",
-      center: ol.proj.fromLonLat([-78.5, -1.0]),
-      zoom: 7
+      center: ol.proj.fromLonLat([-76.75, 0.12]), // fallback
+      zoom: 10
     });
 
     const map = new ol.Map({
@@ -153,10 +155,55 @@
       view
     });
 
+    // ========= EXTENT REAL DESDE CAPABILITIES (tu capa, no el OSM) =========
+    function loadHomeExtentFromCapabilities(layerNameForExtent = WMS.muy_alta) {
+      const capUrl = `${owsBase}&SERVICE=WMS&REQUEST=GetCapabilities`;
+
+      return fetch(capUrl)
+        .then(r => r.text())
+        .then(text => {
+          const xml = new DOMParser().parseFromString(text, "text/xml");
+          const layers = Array.from(xml.getElementsByTagName("Layer"));
+
+          const target = layers.find(l => {
+            const n = l.getElementsByTagName("Name")[0];
+            return n && n.textContent === layerNameForExtent;
+          });
+
+          if (!target) throw new Error("Capa no encontrada en capabilities");
+
+          const geo = target.getElementsByTagName("EX_GeographicBoundingBox")[0];
+          if (!geo) throw new Error("Sin EX_GeographicBoundingBox");
+
+          const west  = parseFloat(geo.getElementsByTagName("westBoundLongitude")[0].textContent);
+          const east  = parseFloat(geo.getElementsByTagName("eastBoundLongitude")[0].textContent);
+          const south = parseFloat(geo.getElementsByTagName("southBoundLatitude")[0].textContent);
+          const north = parseFloat(geo.getElementsByTagName("northBoundLatitude")[0].textContent);
+
+          homeExtent3857 = ol.proj.transformExtent(
+            [west, south, east, north],
+            "EPSG:4326",
+            "EPSG:3857"
+          );
+
+          view.fit(homeExtent3857, { padding: [80, 80, 80, 80] });
+        })
+        .catch(() => {
+          homeExtent3857 = null;
+          view.setCenter(ol.proj.fromLonLat([-76.75, 0.12]));
+          view.setZoom(10);
+        });
+    }
+
+    // fit inicial
+    loadHomeExtentFromCapabilities(WMS.muy_alta);
+
     // ========= UI BINDINGS =========
     function bindToggle(id, layer) {
       const el = document.getElementById(id);
-      el.addEventListener("change", () => layer.setVisible(el.checked));
+      el.addEventListener("change", () => {
+        layer.setVisible(el.checked);
+      });
     }
 
     function bindOpacity(id, layer) {
@@ -178,17 +225,19 @@
     bindOpacity("op-muy-baja", lyrMuyBaja);
 
     document.getElementById("tool-zoom-in").addEventListener("click", () => {
-      view.animate({ zoom: (view.getZoom() ?? 7) + 1, duration: 150 });
+      view.animate({ zoom: (view.getZoom() ?? 10) + 1, duration: 150 });
     });
 
     document.getElementById("tool-zoom-out").addEventListener("click", () => {
-      view.animate({ zoom: (view.getZoom() ?? 7) - 1, duration: 150 });
+      view.animate({ zoom: (view.getZoom() ?? 10) - 1, duration: 150 });
     });
 
-    // Home: lo dejamos sin capabilities hasta que tengas el QGIS listo.
-    // Luego lo activamos para hacer fit a extent real.
     document.getElementById("tool-home").addEventListener("click", () => {
-      view.animate({ center: ol.proj.fromLonLat([-78.5, -1.0]), zoom: 7, duration: 200 });
+      if (homeExtent3857) {
+        view.fit(homeExtent3857, { padding: [80, 80, 80, 80], duration: 200 });
+      } else {
+        loadHomeExtentFromCapabilities(WMS.muy_alta);
+      }
     });
   </script>
 </body>
