@@ -91,11 +91,9 @@
 
   <script>
     // ========= CONFIG =========
-    const QGIS_BASE_URL = "https://susceptibilidadlagoagrio-production.up.railway.app";
+ 
     const MAP_PATH = "/project/Susceptibilidad_a_inundacion.qgz";
-
-    // Endpoint real en Railway (según tu Capabilities)
-    const owsBase = `${QGIS_BASE_URL}/ows/?MAP=${encodeURIComponent(MAP_PATH)}`;
+    const owsBase = `/ows/?MAP=${encodeURIComponent(MAP_PATH)}`;
 
     // Nombres EXACTOS de capas WMS (tal cual Capabilities)
     const WMS = {
